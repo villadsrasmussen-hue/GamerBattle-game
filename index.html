@@ -284,10 +284,11 @@ async function load(){
     $('credit').textContent=D.t.length.toLocaleString('en-US')+' games. Genres come from Wikipedia and Steam player tags, everything else from Wikidata.';
   }catch(e){$('start').textContent='Game list failed to load. Reload the page.';}
 }
-const has=(i,c)=>D.g[i].includes(c);
+/* g = trusted tags, used for prompts and the bot; w = looser tags, which also count as correct answers */
+const sure=(i,c)=>D.g[i].includes(c), has=(i,c)=>sure(i,c)||!!(D.w[i]&&D.w[i].includes(c));
 function eligible(prompts){
   const ps=[...prompts].sort((a,b)=>members[a].length-members[b].length);
-  return members[ps[0]].filter(i=>!S.used.has(i)&&ps.every(c=>has(i,c)));
+  return members[ps[0]].filter(i=>!S.used.has(i)&&ps.every(c=>sure(i,c)));
 }
 const knownLeft=ps=>eligible(ps).filter(i=>D.s[i]>=3).length;
 
