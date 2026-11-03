@@ -155,6 +155,11 @@ button{cursor:pointer}
 .arm:disabled{background:var(--screen);color:var(--mute);outline:2px solid var(--line);outline-offset:-2px;cursor:default}
 .quiet{background:none;border:0;color:var(--mute);text-decoration:underline;margin-left:auto;padding:6px}
 
+.last{margin:0;font-weight:700;overflow-wrap:anywhere}
+.last i{font-style:normal;color:var(--mute);font-weight:500}
+.tries{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.tries s{background:var(--screen);padding:3px 9px;color:var(--p2);text-decoration-thickness:2px;overflow-wrap:anywhere}
+
 /* log */
 .log{display:flex;flex-direction:column;gap:0;margin:0;padding:0;list-style:none}
 .log li{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 12px;padding:9px 0 9px 12px;border-left:4px solid var(--p1);border-bottom:1px solid var(--line)}
@@ -195,15 +200,16 @@ button{cursor:pointer}
     <div class="btns"><button class="go" id="start" disabled>Loading games…</button><button class="go alt" id="online" disabled>Play a friend</button></div>
     <div class="demo" aria-label="Example round">
       <span class="lab">Example round</span>
-      <p><i>Prompt: Released in 2009.</i> You play <b>League of Legends</b>. <i>Mainstream, so the bot gets a broad prompt.</i></p>
+      <p><i>Prompt: Released around 2009.</i> You play <b>League of Legends</b>. <i>Mainstream, so the bot gets a broad prompt.</i></p>
       <p><i>Prompt: MOBA.</i> The bot plays <b>Awesomenauts</b>. <i>A deep cut, so you get something narrow.</i></p>
-      <p><i>Prompt: Released in 2012.</i> Your turn. 45 seconds.</p>
+      <p><i>Prompt: Released around 2012.</i> Your turn. 45 seconds.</p>
     </div>
     <ul class="rules">
       <li><b>Niche pays</b>Mainstream picks add a little charge. Obscure ones fill the meter fast.</li>
       <li><b>Killshot</b>With a full meter, arm it before you answer. Your opponent must then satisfy two categories at once.</li>
       <li><b>One use each</b>A game can be played once per match, and so can a category.</li>
-      <li><b>Sudden death</b>Run out the clock and you lose. Wrong guesses only cost you time.</li>
+      <li><b>Sudden death</b>Run out the clock and you lose. Wrong guesses only cost you time, and your opponent sees them.</li>
+      <li><b>Close enough</b>Year prompts accept one year either side, so 2015 also takes 2014 and 2016.</li>
     </ul>
     <p class="foot" id="credit">Game data from Wikidata, Wikipedia and Steam.</p>
   </section>
@@ -231,12 +237,14 @@ button{cursor:pointer}
       <div class="side b"><span class="who" id="whoB">BOT</span><div class="bar" id="barB"><i></i></div><span class="lab status" id="stB"></span></div>
     </div>
     <div class="arena" id="arena">
+      <p class="last" id="last" aria-live="polite" hidden></p>
       <span class="lab" id="turnLab"></span>
       <div class="prompts" id="prompts" aria-live="polite"></div>
       <form class="field" id="form" autocomplete="off">
         <input id="guess" type="text" placeholder="Type a game" aria-label="Your answer" role="combobox" aria-expanded="false" aria-controls="sug" autocapitalize="off" spellcheck="false">
         <ul class="sug" id="sug" role="listbox" hidden></ul>
       </form>
+      <div class="tries" id="tries" aria-live="polite" hidden></div>
       <p class="msg" id="msg" aria-live="polite"></p>
       <div class="controls">
         <button class="arm" id="arm" type="button" disabled aria-pressed="false">Charging</button>
@@ -285,7 +293,8 @@ async function load(){
   }catch(e){$('start').textContent='Game list failed to load. Reload the page.';}
 }
 /* g = trusted tags, used for prompts and the bot; w = looser tags, which also count as correct answers */
-const sure=(i,c)=>D.g[i].includes(c), has=(i,c)=>sure(i,c)||!!(D.w[i]&&D.w[i].includes(c));
+const sure=(i,c)=>D.g[i].includes(c), near=(i,c)=>D.c[c][0]==='y'&&[-1,1].some(n=>{const y=yearCat[+D.c[c][1]+n];return y!==undefined&&sure(i,y);}),
+  has=(i,c)=>sure(i,c)||!!(D.w[i]&&D.w[i].includes(c))||near(i,c);
 function eligible(prompts){
   const ps=[...prompts].sort((a,b)=>members[a].length-members[b].length);
   return members[ps[0]].filter(i=>!S.used.has(i)&&ps.every(c=>sure(i,c)));
@@ -295,7 +304,7 @@ const knownLeft=ps=>eligible(ps).filter(i=>D.s[i]>=3).length;
 /* ---------- labels ---------- */
 function catText(c){
   const [t,l]=D.c[c];
-  return {y:['Released in',l],d:['Released in the',l],g:['Genre',l],p:['On',l],c:['Made or published by',l],s:['Series',l],m:['Mode',l]}[t];
+  return {y:['Released around',l],d:['Released in the',l],g:['Genre',l],p:['On',l],c:['Made or published by',l],s:['Series',l],m:['Mode',l]}[t];
 }
 const catLine=c=>catText(c).join(' ');
 
@@ -342,6 +351,7 @@ function startMatch(){
   if(S.online)pub();
 }
 function beginTurn(w){
+  S.prevTries=S.tries||[];S.tries=[];
   S.turn=w;S.deadline=performance.now()+TURN;render();
   if(w==='p'){$('guess').value='';$('guess').focus({preventScroll:true});}
   else if(!S.online)botPlan();
@@ -384,11 +394,23 @@ function flash(){
   const f=document.createElement('div');f.className='flash';f.innerHTML='<span>KILLSHOT</span>';
   document.body.append(f);setTimeout(()=>f.remove(),950);
 }
+function renderTries(){
+  const b=$('tries');b.textContent='';const list=S&&S.turn==='b'?(S.tries||[]):[];
+  b.hidden=!list.length;if(!list.length)return;
+  const l=document.createElement('span');l.className='lab';l.textContent=oppName()+' tried';b.append(l);
+  list.forEach(t=>{const s=document.createElement('s');s.textContent=t;b.append(s);});
+}
 function setMsg(t,k){const m=$('msg');m.textContent=t;m.className='msg'+(k?' '+k:'');}
 function render(){
   const mine=S.turn==='p';
   $('arena').className='arena '+(mine?'mine':'theirs');
   $('turnLab').textContent=mine?(S.prompts.length>1?'Killshot. Fit both or lose':'Your turn. Name a game'):(S.prompts.length>1?'You fired a killshot':oppName()+' is thinking');
+  const e0=S.chain[0],last=$('last');last.hidden=!e0;last.textContent='';
+  if(e0){
+    last.textContent=(e0.w==='p'?'You':oppName())+' played '+D.t[e0.i]+' ('+D.y[e0.i]+')';
+    if(e0.w==='b'&&S.prevTries&&S.prevTries.length){const t=document.createElement('i');t.textContent=' after trying '+S.prevTries.join(', ');last.append(t);}
+  }
+  renderTries();
   const pr=$('prompts');pr.textContent='';
   S.prompts.forEach((c,n)=>{
     if(n){const p=document.createElement('span');p.className='plus';p.textContent='+';pr.append(p);}
@@ -442,8 +464,9 @@ function hideSug(){hits=[];sel=0;$('sug').hidden=true;$('guess').setAttribute('a
 function answer(i){
   if(S.turn!=='p'||S.over)return;
   const g=$('guess');hideSug();
-  if(S.used.has(i))return reject(D.t[i]+' has already been played.');
+  if(S.used.has(i)){netTry(D.t[i]);return reject(D.t[i]+' has already been played.');}
   const miss=S.prompts.find(c=>!has(i,c));
+  if(miss!==undefined)netTry(D.t[i]);
   if(miss!==undefined)return reject(D.t[i]+' doesn\'t fit: '+catLine(miss)+'.');
   g.value='';play('p',i);
 }
@@ -463,11 +486,15 @@ function botPlan(){
   const speed=[[7,16],[5,13],[3,9]][S.lvl], wait=(speed[0]+Math.random()*(speed[1]-speed[0]))*1000;
   const go=fn=>botT.push(setTimeout(()=>{if(S&&!S.over&&S.turn==='b')fn();},wait));
   if(!opts.length||Math.random()<blank){
-    go(()=>{setMsg('The bot is stuck…');});
+    go(()=>{botTry();setMsg('The bot is stuck…');});
     return;
   }
   const i=S.lvl===0?opts.sort((a,b)=>D.s[b]-D.s[a])[Math.floor(Math.random()*Math.min(6,opts.length))]:rnd(opts);
-  go(()=>typeBot(i));
+  go(()=>{if(Math.random()<.3)botTry();typeBot(i);});
+}
+function botTry(){
+  const c=[];for(let i=0;i<400;i++)if(!S.prompts.every(p=>has(i,p)))c.push(i);
+  if(c.length){S.tries.push(D.t[rnd(c)]);renderTries();}
 }
 function typeBot(i){
   const g=$('guess'),t=D.t[i];let n=0;
@@ -513,7 +540,7 @@ function netPeers(){
   const want=NET.seat==='h'?'g':'h';
   const o=NET.room.peers().find(p=>!p.sameTab&&p.kind==='viewer'&&p.presence&&p.presence.seat===want);
   NET.oppGone=!o;
-  if(o){NET.oppName=String(o.presence.nick||'Opponent').slice(0,16);if(o.presence.st)applySnap(o.presence.st);}
+  if(o){NET.oppName=String(o.presence.nick||'Opponent').slice(0,16);if(o.presence.st)applySnap(o.presence.st);netTries(o.presence.tr);}
   if(!S||S.over&&$('end').hidden){
     $('roomState').textContent=o?(NET.seat==='h'?oppName()+' is here.':'Waiting for '+oppName()+' to start.'):(NET.seat==='h'?'Waiting for your friend.':'Waiting for the host. Check the code if this takes a while.');
     $('hostStart').hidden=!(o&&NET.seat==='h');
@@ -522,6 +549,16 @@ function netPeers(){
     $('whoB').textContent=oppName().toUpperCase();
     if(!o&&S.turn==='p')setMsg(oppName()+' lost connection.','bad');
   }
+}
+function netTry(title){
+  if(!S.online)return;
+  const tr=NET.tr&&NET.tr.e===S.e&&NET.tr.n===S.n?NET.tr:{e:S.e,n:S.n,l:[]};
+  tr.l=tr.l.concat(title.slice(0,40)).slice(-5);NET.tr=tr;
+  NET.room.presence({tr}).catch(()=>{});
+}
+function netTries(tr){
+  if(!S||S.over||S.turn!=='b'||!tr||tr.e!==S.e||tr.n!==S.n||!Array.isArray(tr.l))return;
+  S.tries=tr.l.filter(x=>typeof x==='string').slice(-5).map(x=>x.slice(0,40));renderTries();
 }
 function leave(){
   if(NET){NET.room.leave().catch(()=>{});NET=null;}
@@ -544,8 +581,8 @@ function applySnap(st){
   const fresh=!S||st.e>S.e, mine=w=>w===NET.seat?'p':'b';
   const chain=st.l.filter(r=>Array.isArray(r)&&ints([r[1]],D.t.length)&&[1,2,3,4].includes(r[2])&&ints(r[5],D.c.length)&&r[5].length).map(r=>({w:mine(r[0]),i:r[1],tier:r[2],gain:r[3]|0,kill:!!r[4],prompts:r[5]}));
   const hadKill=chain[0]&&chain[0].kill&&(!S||!S.chain[0]||S.chain[0].i!==chain[0].i);
-  const best=fresh?null:S.best;
-  S={lvl:0,seed:0,used:new Set(st.u),usedCats:new Set(st.c),prompts:st.q,turn:mine(st.t),meter:NET.seat==='h'?{p:st.m[0],b:st.m[1]}:{p:st.m[1],b:st.m[0]},armed:false,chain,deadline:0,over:false,best,online:true,e:st.e,n:st.n};
+  const best=fresh?null:S.best, tries=fresh?[]:(S.tries||[]);
+  S={lvl:0,seed:0,used:new Set(st.u),usedCats:new Set(st.c),prompts:st.q,turn:mine(st.t),meter:NET.seat==='h'?{p:st.m[0],b:st.m[1]}:{p:st.m[1],b:st.m[0]},armed:false,chain,deadline:0,over:false,best,online:true,e:st.e,n:st.n,tries};
   if(fresh)enterMatch();
   const l=$('log');l.textContent='';[...chain].reverse().forEach(e=>addLog(l,e));
   if(st.o)return finish(mine(st.o[0]),st.o[1]==='quit'?'quit':'time',true);
