@@ -153,6 +153,9 @@ button{cursor:pointer}
 .arm{background:var(--charge);color:var(--on-bright);border:0;padding:10px 16px;font:700 18px/1 var(--body);transform:skewX(-8deg)}
 .arm[aria-pressed="true"]{background:var(--text)}
 .arm:disabled{background:var(--screen);color:var(--mute);outline:2px solid var(--line);outline-offset:-2px;cursor:default}
+.life{background:var(--panel);border:2px solid var(--p1);color:var(--p1);padding:8px 12px;font-weight:700;font-variant-numeric:tabular-nums}
+.life:disabled{border-color:var(--line);color:var(--mute);cursor:default}
+.life:not(:disabled):hover{background:var(--p1);color:var(--on-bright)}
 .quiet{background:none;border:0;color:var(--mute);text-decoration:underline;margin-left:auto;padding:6px}
 
 .last{margin:0;font-weight:700;overflow-wrap:anywhere}
@@ -196,6 +199,8 @@ button{cursor:pointer}
       <label><input type="radio" name="lvl" id="lvl-0" value="0"><span>Casual<small>Knows the big hits</small></span></label>
       <label><input type="radio" name="lvl" id="lvl-1" value="1" checked><span>Regular<small>Plays a lot</small></span></label>
       <label><input type="radio" name="lvl" id="lvl-2" value="2"><span>Speedrunner<small>Knows too much</small></span></label>
+      <label><input type="radio" name="lvl" id="lvl-3" value="3"><span>Endless<small>Never stuck, plays the most popular game</small></span></label>
+      <label><input type="radio" name="lvl" id="lvl-4" value="4"><span>Endless+<small>Never stuck, plays the most obscure game</small></span></label>
     </fieldset>
     <div class="btns"><button class="go" id="start" disabled>Loading games…</button><button class="go alt" id="online" disabled>Play a friend</button></div>
     <div class="demo" aria-label="Example round">
@@ -209,6 +214,7 @@ button{cursor:pointer}
       <li><b>Killshot</b>With a full meter, arm it before you answer. Your opponent must then satisfy two categories at once.</li>
       <li><b>One use each</b>A game can be played once per match, and so can a category.</li>
       <li><b>Sudden death</b>Run out the clock and you lose. Wrong guesses only cost you time, and your opponent sees them.</li>
+      <li><b>Lifelines</b>Each match you get 4 rerolls, which swap your category for a random big one, and 2 escapes, which play the most popular fitting game for you.</li>
       <li><b>Close enough</b>Year prompts accept one year either side, so 2015 also takes 2014 and 2016.</li>
     </ul>
     <p class="foot" id="credit">Game data from Wikidata, Wikipedia and Steam.</p>
@@ -248,6 +254,8 @@ button{cursor:pointer}
       <p class="msg" id="msg" aria-live="polite"></p>
       <div class="controls">
         <button class="arm" id="arm" type="button" disabled aria-pressed="false">Charging</button>
+        <button class="life" id="reroll" type="button" disabled>Reroll 4</button>
+        <button class="life" id="escape" type="button" disabled>Escape 2</button>
         <button class="quiet" id="quit" type="button">Give up</button>
       </div>
     </div>
@@ -271,7 +279,7 @@ const TIERS=[null,{n:'Mainstream',g:12},{n:'Popular',g:20},{n:'Deep cut',g:34},{
 const tierOf=s=>s>=25?1:s>=10?2:s>=4?3:4;
 const TOO_BROAD=new Set(['Windows','Mac','Linux','iOS','Android','Multiplayer']);
 const MAX_PROMPT=4000, MIN_PROMPT=4;
-let NET=null, ROOM=null, D=null, S=null, timer=null, botT=[], members=[], K=[], norm=[], yearCat={};
+let LIFE={r:4,e:2}, NET=null, ROOM=null, D=null, S=null, timer=null, botT=[], members=[], K=[], norm=[], yearCat={};
 const exact=new Map(), ROMAN={2:'ii',3:'iii',4:'iv',5:'v',6:'vi',7:'vii',8:'viii',9:'ix',10:'x'};
 
 /* ---------- data ---------- */
@@ -335,6 +343,7 @@ function killPair(i){
 function enterMatch(){
   for(const id of ['title','end','lobby'])$(id).hidden=true;
   const g=$('game');g.hidden=false;g.style.display='flex';
+  LIFE={r:4,e:2};
   $('log').textContent='';$('guess').value='';$('whoB').textContent=NET?oppName().toUpperCase():'BOT';
   setMsg('');clearInterval(timer);timer=setInterval(tick,100);
 }
@@ -363,20 +372,20 @@ function tick(){
   /* online, the mover's own clock decides; the 3s grace only covers a player who vanished */
   if(left<=(S.online&&S.turn==='b'?-3000:0))finish(S.turn==='p'?'b':'p','time');
 }
-function play(w,i){
+function play(w,i,esc){
   const tier=tierOf(D.s[i]), other=w==='p'?'b':'p', pre=S.meter[w];
   S.used.add(i);
-  if(!S.best||(w==='p'&&D.s[i]<D.s[S.best]))if(w==='p')S.best=i;
+  if(w==='p'&&!esc&&(S.best==null||D.s[i]<D.s[S.best]))S.best=i;
   const wantKill=w==='p'?S.armed:pre>=FULL;
   let prompts=null, kill=false;
   if(wantKill){prompts=killPair(i);kill=!!prompts;}
   S.armed=false;
-  if(kill)S.meter[w]=0; else S.meter[w]=Math.min(FULL,pre+TIERS[tier].g);
+  if(kill)S.meter[w]=0; else if(!esc)S.meter[w]=Math.min(FULL,pre+TIERS[tier].g);
   if(wantKill&&!kill&&w==='p')setMsg('No fair killshot from that game. Your charge is safe.','bad');
   else setMsg('');
   if(!kill)prompts=nextPrompt(i,tier);
   prompts.forEach(c=>S.usedCats.add(c));
-  const e={w,i,tier,gain:kill?0:Math.min(FULL-pre,TIERS[tier].g),prompts,kill};
+  const e={w,i,tier,gain:kill||esc?0:Math.min(FULL-pre,TIERS[tier].g),prompts,kill,esc:!!esc};
   S.chain.unshift(e);addLog($('log'),e);
   S.prompts=prompts;
   if(kill)flash();
@@ -386,7 +395,7 @@ function play(w,i){
 function addLog(list,e){
   const li=document.createElement('li');if(e.w==='b')li.className='b';
   const a=document.createElement('strong');a.textContent=D.t[e.i]+' ('+D.y[e.i]+')';
-  const b=document.createElement('span');b.className='gain';b.textContent=e.kill?'Killshot':TIERS[e.tier].n+(e.gain?' +'+e.gain:'');
+  const b=document.createElement('span');b.className='gain';b.textContent=e.kill?'Killshot':e.esc?'Escape':TIERS[e.tier].n+(e.gain?' +'+e.gain:'');
   const c=document.createElement('span');c.className='then';c.textContent=(e.w==='p'?'You':oppName())+' → '+e.prompts.map(catLine).join(' + ');
   li.append(a,b,c);list.prepend(li);
 }
@@ -428,6 +437,31 @@ function render(){
   if(S.meter.p>=FULL){a.disabled=false;a.textContent=S.armed?'Armed: next answer fires':'Arm killshot';a.setAttribute('aria-pressed',S.armed);}
   else{a.disabled=true;a.textContent='Charging '+S.meter.p+'%';a.setAttribute('aria-pressed','false');}
   $('clock').textContent=TURN/1000;$('clock').classList.remove('low');
+  lifeUI();
+}
+function lifeUI(){
+  const mine=S&&S.turn==='p'&&!S.over,r=$('reroll'),e=$('escape');
+  r.textContent='Reroll '+LIFE.r;e.textContent='Escape '+LIFE.e;
+  r.disabled=!mine||!LIFE.r;e.disabled=!mine||!LIFE.e;
+}
+/* swap the prompt for a random big category; on a killshot only the narrower half changes */
+function reroll(){
+  if(!S||S.over||S.turn!=='p'||!LIFE.r)return;
+  const old=[...S.prompts].sort((a,b)=>K[a]-K[b])[0], keep=S.prompts.filter(c=>c!==old);
+  const pool=D.c.map((c,i)=>i).filter(i=>K[i]>=200&&!TOO_BROAD.has(D.c[i][1])&&D.c[i][0]!=='m'&&!S.usedCats.has(i)&&knownLeft(keep.concat(i))>=(keep.length?2:5));
+  if(!pool.length)return setMsg('No big category is left to reroll into.','bad');
+  let n=Math.random()*pool.reduce((t,c)=>t+Math.min(K[c],1500),0),pick=pool[0];
+  for(const c of pool){n-=Math.min(K[c],1500);if(n<=0){pick=c;break;}}
+  LIFE.r--;S.usedCats.add(pick);S.prompts=keep.concat(pick);
+  const left=S.deadline;render();S.deadline=left;setMsg('Rerolled.');
+  if(S.online)pub();
+  $('guess').focus({preventScroll:true});
+}
+function escapeTurn(){
+  if(!S||S.over||S.turn!=='p'||!LIFE.e)return;
+  const o=eligible(S.prompts);
+  if(!o.length)return setMsg('No known game fits this prompt, so an escape would not help.','bad');
+  LIFE.e--;hideSug();$('guess').value='';play('p',o[0],true);
 }
 
 /* ---------- search ---------- */
@@ -481,6 +515,13 @@ function knows(i){
   return h<p;
 }
 function botPlan(){
+  if(S.lvl>=3){
+    const o=eligible(S.prompts);
+    if(!o.length)return;
+    const i=S.lvl===3?o[0]:o[o.length-1];
+    botT.push(setTimeout(()=>{if(S&&!S.over&&S.turn==='b')typeBot(i);},3000+Math.random()*3000));
+    return;
+  }
   const opts=eligible(S.prompts).filter(knows);
   const blank=[.1,.05,.02][S.lvl]+S.chain.length*.004;
   const speed=[[7,16],[5,13],[3,9]][S.lvl], wait=(speed[0]+Math.random()*(speed[1]-speed[0]))*1000;
@@ -570,7 +611,7 @@ const flip=s=>s==='h'?'g':'h';
 function pub(){
   const seat=w=>w==='p'?NET.seat:flip(NET.seat);
   S.n++;
-  const log=keep=>S.chain.slice(0,keep).map(e=>[e.w==='p'?NET.seat:flip(NET.seat),e.i,e.tier,e.gain,e.kill?1:0,e.prompts]);
+  const log=keep=>S.chain.slice(0,keep).map(e=>[e.w==='p'?NET.seat:flip(NET.seat),e.i,e.tier,e.gain,e.kill?1:e.esc?2:0,e.prompts]);
   const snap={e:S.e,n:S.n,t:seat(S.turn),q:S.prompts,m:NET.seat==='h'?[S.meter.p,S.meter.b]:[S.meter.b,S.meter.p],u:[...S.used],c:[...S.usedCats],l:log(30),o:S.res?[seat(S.res[0]),S.res[1]]:null};
   NET.room.presence({st:snap}).catch(()=>{snap.l=log(6);NET.room.presence({st:snap}).catch(()=>{});});
 }
@@ -579,13 +620,17 @@ function applySnap(st){
   if(!st||!Number.isInteger(st.e)||!Number.isInteger(st.n)||!ints(st.q,D.c.length)||!st.q.length||!ints(st.u,D.t.length)||!ints(st.c,D.c.length)||!ints(st.m,FULL+1)||!Array.isArray(st.l))return;
   if(S&&(st.e<S.e||(st.e===S.e&&st.n<=S.n)))return;
   const fresh=!S||st.e>S.e, mine=w=>w===NET.seat?'p':'b';
-  const chain=st.l.filter(r=>Array.isArray(r)&&ints([r[1]],D.t.length)&&[1,2,3,4].includes(r[2])&&ints(r[5],D.c.length)&&r[5].length).map(r=>({w:mine(r[0]),i:r[1],tier:r[2],gain:r[3]|0,kill:!!r[4],prompts:r[5]}));
+  const chain=st.l.filter(r=>Array.isArray(r)&&ints([r[1]],D.t.length)&&[1,2,3,4].includes(r[2])&&ints(r[5],D.c.length)&&r[5].length).map(r=>({w:mine(r[0]),i:r[1],tier:r[2],gain:r[3]|0,kill:r[4]===1,esc:r[4]===2,prompts:r[5]}));
   const hadKill=chain[0]&&chain[0].kill&&(!S||!S.chain[0]||S.chain[0].i!==chain[0].i);
-  const best=fresh?null:S.best, tries=fresh?[]:(S.tries||[]);
+  const best=fresh?null:S.best, tries=fresh?[]:(S.tries||[]), wasTurn=S&&S.turn, wasLen=S?S.chain.length:0, oldEnd=S&&S.deadline, wasPrev=S&&S.prevTries, wasFirst=S&&S.chain[0]&&S.chain[0].i;
   S={lvl:0,seed:0,used:new Set(st.u),usedCats:new Set(st.c),prompts:st.q,turn:mine(st.t),meter:NET.seat==='h'?{p:st.m[0],b:st.m[1]}:{p:st.m[1],b:st.m[0]},armed:false,chain,deadline:0,over:false,best,online:true,e:st.e,n:st.n,tries};
   if(fresh)enterMatch();
   const l=$('log');l.textContent='';[...chain].reverse().forEach(e=>addLog(l,e));
   if(st.o)return finish(mine(st.o[0]),st.o[1]==='quit'?'quit':'time',true);
+  /* a reroll changes the prompt without ending the turn, so the running clock stays */
+  if(!fresh&&wasTurn===S.turn&&chain.length===wasLen&&(chain[0]?chain[0].i:undefined)===wasFirst){
+    S.deadline=oldEnd;S.prevTries=wasPrev;render();setMsg(oppName()+' rerolled.');return;
+  }
   setMsg('');if(hadKill)flash();
   beginTurn(S.turn);
 }
@@ -627,6 +672,7 @@ function finish(winner,why,fromNet){
 /* ---------- events ---------- */
 $('start').onclick=()=>{if(NET)leave();startMatch();};$('again').onclick=startMatch;
 $('quit').onclick=()=>{if(S&&!S.over)finish('b','quit');};
+$('reroll').onclick=reroll;$('escape').onclick=escapeTurn;
 $('online').onclick=openLobby;$('back').onclick=leave;$('leave').onclick=leave;
 $('create').onclick=()=>{const c=[...crypto.getRandomValues(new Uint8Array(4))].map(n=>'abcdefghjkmnpqrstuvwxyz23456789'[n%31]).join('');enterRoom(c,'h');};
 $('join').onclick=()=>{const c=$('code').value.trim().toLowerCase();if(!/^[a-z0-9]{4,8}$/.test(c))return note('Enter the code your friend sent you.');enterRoom(c,'g');};
