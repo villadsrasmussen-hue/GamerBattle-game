@@ -1,0 +1,387 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Proxy Printer</title>
+<meta name="theme-color" content="#16151c">
+<style>
+  :root { --bg:#16151c; --panel:#211f2a; --line:#34313f; --text:#ece9f3; --dim:#9a95a8;
+          --accent:#c79bff; --bad:#ff7a8a; --good:#7be0a7; color-scheme:dark; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:15px/1.45 system-ui, sans-serif;
+         padding:max(12px, env(safe-area-inset-top)) max(14px, env(safe-area-inset-right)) 120px max(14px, env(safe-area-inset-left)); }
+  h1 { font-size:21px; margin:4px 0 2px; }
+  .sub { color:var(--dim); margin:0 0 14px; font-size:13px; }
+  textarea, select, input[type=number] { width:100%; padding:10px 12px; border-radius:10px; border:1px solid var(--line);
+         background:var(--panel); color:var(--text); font:inherit; }
+  textarea { min-height:150px; resize:vertical; font:13px/1.4 ui-monospace, monospace; }
+  button { padding:11px 14px; border-radius:10px; border:1px solid var(--line); background:#2c2938;
+           color:var(--text); font:inherit; cursor:pointer; }
+  button:disabled { opacity:.5; }
+  button.primary { background:var(--accent); color:#1a1024; border-color:var(--accent); font-weight:650; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  .row > * { flex:1 1 auto; }
+  #status { margin:10px 0; color:var(--dim); min-height:1.4em; }
+  #status.err { color:var(--bad); }
+  h2 { font-size:15px; color:var(--accent); margin:20px 0 8px; }
+  h2 span { color:var(--dim); font-weight:400; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(104px, 1fr)); gap:10px; }
+  .card { position:relative; }
+  .card img { width:100%; aspect-ratio:63/88; border-radius:6px; display:block; background:var(--panel); object-fit:cover; }
+  .card.off img { opacity:.3; }
+  .card .name { font-size:11px; color:var(--dim); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-top:3px; }
+  .card .qty { position:absolute; top:4px; left:4px; display:flex; gap:2px; align-items:center;
+               background:#000c; border-radius:8px; padding:2px; font-size:13px; font-weight:700; }
+  .card .qty button { padding:0 7px; min-width:24px; border-radius:6px; font-size:15px; line-height:22px; }
+  .card .qty b { min-width:16px; text-align:center; }
+  .card .flip { position:absolute; top:4px; right:4px; padding:2px 7px; font-size:12px; background:#000c; }
+  .opts { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .opts label { font-size:12px; color:var(--dim); display:flex; flex-direction:column; gap:4px; }
+  .opts label.chk { flex-direction:row; align-items:center; gap:8px; font-size:14px; color:var(--text); }
+  .bar { position:fixed; left:0; right:0; bottom:0; background:var(--panel); border-top:1px solid var(--line);
+         padding:10px max(14px, env(safe-area-inset-right)) max(10px, env(safe-area-inset-bottom)) max(14px, env(safe-area-inset-left)); z-index:5; }
+  .bar .row button { flex:1 1 140px; }
+  #prog { height:4px; background:var(--line); border-radius:2px; margin-bottom:8px; overflow:hidden; }
+  #prog i { display:block; height:100%; width:0; background:var(--accent); transition:width .2s; }
+  dialog { background:var(--bg); color:var(--text); border:1px solid var(--line); border-radius:14px;
+           width:min(96vw, 720px); max-height:88vh; padding:14px; }
+  dialog::backdrop { background:#000a; }
+  .prints { display:grid; grid-template-columns:repeat(auto-fill, minmax(110px,1fr)); gap:10px; margin-top:10px; }
+  .prints div { font-size:11px; color:var(--dim); cursor:pointer; }
+  .prints div.sel img { outline:3px solid var(--accent); }
+  .prints img { width:100%; border-radius:6px; display:block; margin-bottom:3px; }
+  .missing { color:var(--bad); font-size:13px; }
+  details { margin-top:16px; color:var(--dim); font-size:13px; }
+</style>
+</head>
+<body>
+<h1>Proxy Printer</h1>
+<p class="sub">Paste a decklist, pick the art, get a print-ready PDF of real-size cards (63 × 88 mm).</p>
+
+<textarea id="deck" placeholder="1 Sol Ring&#10;1 Command Tower (CMM) 413&#10;4x Lightning Bolt&#10;&#10;Works with Archidekt, Moxfield and EDHREC text exports."></textarea>
+<div class="row" style="margin-top:8px">
+  <button id="load" class="primary">Load cards</button>
+  <button id="clear">Clear</button>
+</div>
+<div id="status"></div>
+<div id="missing" class="missing"></div>
+
+<div id="deckBox" hidden>
+  <h2>Cards <span id="count"></span></h2>
+  <p class="sub" style="margin:0 0 8px">Tap a card to choose another printing. Set a number to 0 to skip it.</p>
+  <div class="row" style="margin-bottom:10px">
+    <button id="noBasics">Skip basic lands</button>
+    <button id="allOne">All to 1</button>
+  </div>
+  <div id="grid" class="grid"></div>
+  <div id="tokBox" hidden>
+    <h2>Tokens &amp; emblems <span>(off until you add them)</span></h2>
+    <div id="tokens" class="grid"></div>
+  </div>
+
+  <h2>Print settings</h2>
+  <div class="opts">
+    <label>Paper<select id="paper"><option value="a4">A4</option><option value="letter">US Letter</option></select></label>
+    <label>Gap between cards (mm)<input id="gap" type="number" min="0" max="5" step="0.5" value="0"></label>
+    <label>Picture quality<select id="quality"><option value="png">Best (slower)</option><option value="large">Good (faster, smaller file)</option></select></label>
+    <label>Card corners<select id="corners"><option value="black">Black</option><option value="white">White</option></select></label>
+    <label class="chk"><input id="bg" type="checkbox" checked> Black behind cards</label>
+    <label class="chk"><input id="marks" type="checkbox" checked> Cut marks</label>
+  </div>
+  <details><summary>Printing tips</summary>
+    <p>Print at <b>100% / actual size</b> (turn off "fit to page"), otherwise the cards come out too small. Check one card against a real one before printing the whole deck.</p>
+  </details>
+</div>
+
+<div class="bar" id="bar" hidden>
+  <div id="prog"><i></i></div>
+  <div class="row">
+    <button id="make" class="primary">Make PDF</button>
+    <button id="save" hidden>Save / share PDF</button>
+  </div>
+</div>
+
+<dialog id="pick">
+  <div class="row" style="justify-content:space-between">
+    <strong id="pickTitle" style="flex:1 1 60%"></strong>
+    <button id="pickClose" style="flex:0 0 auto">Close</button>
+  </div>
+  <div id="pickList" class="prints"></div>
+</dialog>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const CARD_W = 63, CARD_H = 88;
+const PAPER = { a4: [210, 297], letter: [215.9, 279.4] };
+const HEADERS = new Set(["deck","commander","commanders","companion","sideboard","maybeboard","mainboard","main","considering","tokens","about"]);
+const store = {
+  get(k, d) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch { return d; } },
+  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
+};
+let cards = [], tokens = [], pdfBlob = null, pdfName = 'deck.pdf';
+const key = n => n.split('//')[0].trim().toLowerCase();
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+function status(msg, err) { $('status').textContent = msg; $('status').className = err ? 'err' : ''; }
+
+// ---------- decklist ----------
+const LINE = /^(?:(\d+)\s*x?\s+)?(.+?)(?:\s+\(([A-Za-z0-9]{2,6})\)(?:\s+([^\s*]+))?)?(?:\s+\*[A-Za-z]+\*)?(?:\s+\[.*\])?(?:\s+\^.*\^)?\s*$/;
+function parse(text) {
+  const merged = new Map();
+  let skipping = false;
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || line.startsWith('//') || line.startsWith('#')) continue;
+    const head = line.replace(/:$/, '').toLowerCase();
+    if (HEADERS.has(head) || line.endsWith(':')) { skipping = ['sideboard','maybeboard','considering'].includes(head); continue; }
+    if (skipping) continue;
+    const m = line.match(LINE); if (!m) continue;
+    const [, q, name, set, num] = m;
+    const e = { qty: +(q || 1), name: name.trim(), set: (set || '').toLowerCase(), number: num || '' };
+    const k = key(e.name) + '|' + e.set + '|' + e.number;
+    if (merged.has(k)) merged.get(k).qty += e.qty; else merged.set(k, e);
+  }
+  return [...merged.values()];
+}
+
+// ---------- Scryfall ----------
+async function scry(url, body) {
+  for (let i = 0; i < 4; i++) {
+    const r = await fetch(url, body ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {});
+    if (r.status === 429) { await sleep(1000 * (i + 1)); continue; }
+    const j = await r.json();
+    if (!r.ok && j.object === 'error' && r.status !== 404) throw new Error(j.details || 'Scryfall error');
+    return j;
+  }
+  throw new Error('Scryfall is busy, try again in a minute.');
+}
+function faces(c) {
+  if (c.image_uris) return [c.image_uris];
+  return (c.card_faces || []).map(f => f.image_uris).filter(Boolean);
+}
+function option(c) {
+  const f = faces(c); if (!f.length) return null;
+  const pick = x => ({ thumb: x.normal, large: x.large || x.normal, png: x.png || x.large });
+  return { id: c.id, label: `${c.set_name} (${c.set.toUpperCase()}) #${c.collector_number}`,
+           front: pick(f[0]), back: f[1] ? pick(f[1]) : null };
+}
+const oracleOf = c => c.oracle_id || (c.card_faces || [{}])[0].oracle_id;
+
+async function load() {
+  const entries = parse($('deck').value);
+  if (!entries.length) { status('Paste a decklist first.', true); return; }
+  store.set('deck', $('deck').value);
+  $('load').disabled = true; $('missing').textContent = '';
+  status(`Looking up ${entries.length} cards on Scryfall…`);
+  const chosen = store.get('art', {});
+  const found = new Map(), all = [];
+  try {
+    for (let i = 0; i < entries.length; i += 75) {
+      const chunk = entries.slice(i, i + 75);
+      const ids = chunk.map(e => e.set && e.number ? { set: e.set, collector_number: e.number }
+                                 : e.set ? { name: e.name.split('//')[0].trim(), set: e.set }
+                                 : { name: e.name.split('//')[0].trim() });
+      const res = await scry('https://api.scryfall.com/cards/collection', { identifiers: ids });
+      for (const c of res.data || []) {
+        all.push(c);
+        for (const e of chunk) {
+          if (found.has(e)) continue;
+          const samePrint = e.set && e.number && c.set === e.set && c.collector_number === e.number;
+          const sameName = key(c.name) === key(e.name) || (c.card_faces || []).some(f => key(f.name) === key(e.name));
+          if (samePrint || (sameName && !e.number)) { found.set(e, c); break; }
+        }
+      }
+      await sleep(100);
+    }
+    const missing = [];
+    cards = [];
+    for (const e of entries) {
+      const c = found.get(e);
+      if (!c) { missing.push(e.name); continue; }
+      const def = option(c); if (!def) { missing.push(e.name); continue; }
+      cards.push({ name: c.name, qty: e.qty, oracle: oracleOf(c),
+                   basic: /Basic/.test(c.type_line) && /Land/.test(c.type_line),
+                   choice: (!e.number && chosen[key(c.name)]) || def });
+    }
+    tokens = await findTokens(all, chosen);
+    $('missing').textContent = missing.length ? `Not found: ${missing.join(', ')}` : '';
+    status(`${cards.length} cards loaded.`);
+    render();
+  } catch (err) { status(err.message || 'Could not reach Scryfall.', true); }
+  $('load').disabled = false;
+}
+
+async function findTokens(deckCards, chosen) {
+  const makers = new Map();
+  for (const c of deckCards) for (const p of c.all_parts || []) {
+    const tl = p.type_line || '';
+    if ((p.component === 'token' || tl.startsWith('Token') || tl.startsWith('Emblem')) && p.name !== 'Copy' && p.id !== c.id) {
+      if (!makers.has(p.id)) makers.set(p.id, []); makers.get(p.id).push(c.name);
+    }
+  }
+  const ids = [...makers.keys()], out = new Map();
+  for (let i = 0; i < ids.length; i += 75) {
+    const res = await scry('https://api.scryfall.com/cards/collection', { identifiers: ids.slice(i, i + 75).map(id => ({ id })) });
+    for (const t of res.data || []) {
+      const o = oracleOf(t);
+      if (out.has(o)) { out.get(o).makers.push(...makers.get(t.id)); continue; }
+      const def = option(t); if (!def) continue;
+      out.set(o, { name: t.name, qty: 0, oracle: o, token: true, typeLine: t.type_line || '',
+                   makers: [...makers.get(t.id)], choice: chosen['token:' + o] || def });
+    }
+    await sleep(100);
+  }
+  return [...out.values()].sort((a, b) => a.typeLine.startsWith('Emblem') - b.typeLine.startsWith('Emblem') || a.name.localeCompare(b.name));
+}
+
+// ---------- page ----------
+function tile(c, i, list) {
+  const d = document.createElement('div');
+  d.className = 'card' + (c.qty ? '' : ' off');
+  const side = c.showBack && c.choice.back ? c.choice.back : c.choice.front;
+  d.innerHTML = `<img src="${esc(side.thumb)}" loading="lazy" alt="${esc(c.name)}">
+    <div class="qty"><button data-d="-1">−</button><b>${c.qty}</b><button data-d="1">+</button></div>
+    ${c.choice.back ? '<button class="flip">↻</button>' : ''}
+    <div class="name" title="${esc(c.token ? 'Made by ' + [...new Set(c.makers)].join(', ') : c.name)}">${esc(c.name)}</div>`;
+  d.querySelectorAll('.qty button').forEach(b => b.onclick = ev => { ev.stopPropagation(); c.qty = Math.max(0, c.qty + +b.dataset.d); render(); });
+  const flip = d.querySelector('.flip'); if (flip) flip.onclick = ev => { ev.stopPropagation(); c.showBack = !c.showBack; render(); };
+  d.querySelector('img').onclick = () => openPicker(c);
+  return d;
+}
+function render() {
+  $('deckBox').hidden = $('bar').hidden = !cards.length && !tokens.length;
+  $('grid').replaceChildren(...cards.map(tile));
+  $('tokBox').hidden = !tokens.length;
+  $('tokens').replaceChildren(...tokens.map(tile));
+  const n = [...cards, ...tokens].reduce((s, c) => s + c.qty * (c.choice.back ? 2 : 1), 0);
+  const [pw, ph] = PAPER[$('paper').value], gap = +$('gap').value || 0;
+  const per = Math.floor((pw - 10 + gap) / (CARD_W + gap)) * Math.floor((ph - 10 + gap) / (CARD_H + gap));
+  $('count').textContent = `(${n} printed cards, ${Math.ceil(n / per)} pages)`;
+  pdfBlob = null; $('save').hidden = true;
+}
+
+async function openPicker(c) {
+  $('pickTitle').textContent = c.name;
+  $('pickList').innerHTML = '<span class="sub">Loading printings…</span>';
+  $('pick').showModal();
+  try {
+    let url = `https://api.scryfall.com/cards/search?q=${encodeURIComponent('oracleid:' + c.oracle)}&unique=art&order=released&dir=desc&include_extras=true`;
+    const list = [];
+    while (url) { const r = await scry(url); list.push(...(r.data || [])); url = r.next_page; if (url) await sleep(100); }
+    const opts = list.map(option).filter(Boolean);
+    $('pickList').replaceChildren(...opts.map(o => {
+      const d = document.createElement('div');
+      if (o.id === c.choice.id) d.className = 'sel';
+      d.innerHTML = `<img src="${esc(o.front.thumb)}" loading="lazy" alt="">${esc(o.label)}`;
+      d.onclick = () => {
+        c.choice = o;
+        const art = store.get('art', {}); art[c.token ? 'token:' + c.oracle : key(c.name)] = o; store.set('art', art);
+        $('pick').close(); render();
+      };
+      return d;
+    }));
+    if (!opts.length) $('pickList').innerHTML = '<span class="sub">No other printings.</span>';
+  } catch (e) { $('pickList').innerHTML = `<span class="missing">${esc(e.message)}</span>`; }
+}
+
+// ---------- PDF ----------
+async function prepare(url, corners) {
+  const r = await fetch(url); if (!r.ok) throw new Error('Could not download a card picture.');
+  const bmp = await createImageBitmap(await r.blob());
+  const cv = document.createElement('canvas'); cv.width = bmp.width; cv.height = bmp.height;
+  const g = cv.getContext('2d');
+  g.fillStyle = corners === 'white' ? '#fff' : '#000'; g.fillRect(0, 0, cv.width, cv.height);
+  g.drawImage(bmp, 0, 0);
+  return cv.toDataURL('image/jpeg', 0.92);
+}
+async function makePdf() {
+  const q = $('quality').value, corners = $('corners').value;
+  const queue = [];
+  for (const c of [...cards, ...tokens]) for (let i = 0; i < c.qty; i++) {
+    queue.push(c.choice.front[q]); if (c.choice.back) queue.push(c.choice.back[q]);
+  }
+  if (!queue.length) { status('Every card is set to 0.', true); return; }
+  $('make').disabled = true;
+  const unique = [...new Set(queue)], ready = new Map();
+  let done = 0, next = 0;
+  const bar = $('prog').firstChild;
+  try {
+    await Promise.all(Array.from({ length: 6 }, async () => {
+      while (next < unique.length) {
+        const u = unique[next++];
+        ready.set(u, await prepare(u, corners));
+        done++; bar.style.width = (done / unique.length * 90) + '%';
+        status(`Downloading pictures ${done} / ${unique.length}…`);
+      }
+    }));
+    status('Building the PDF…'); await sleep(30);
+    const paper = $('paper').value, [pw, ph] = PAPER[paper], gap = +$('gap').value || 0;
+    const cols = Math.floor((pw - 10 + gap) / (CARD_W + gap)), rows = Math.floor((ph - 10 + gap) / (CARD_H + gap));
+    const gw = cols * CARD_W + (cols - 1) * gap, gh = rows * CARD_H + (rows - 1) * gap;
+    const x0 = (pw - gw) / 2, y0 = (ph - gh) / 2, per = cols * rows;
+    const doc = new jspdf.jsPDF({ unit: 'mm', format: paper === 'a4' ? 'a4' : 'letter', compress: true });
+    for (let s = 0; s < queue.length; s += per) {
+      if (s) doc.addPage();
+      const page = queue.slice(s, s + per), count = page.length;
+      if ($('bg').checked) {
+        doc.setFillColor(0, 0, 0);
+        const filled = (c, r) => c >= 0 && c < cols && r >= 0 && r < rows && r * cols + c < count;
+        page.forEach((_, i) => {
+          const c = i % cols, r = Math.floor(i / cols), x = x0 + c * (CARD_W + gap), y = y0 + r * (CARD_H + gap), pad = 1.5;
+          const l = filled(c - 1, r) ? gap / 2 : pad, rt = filled(c + 1, r) ? gap / 2 : pad;
+          const t = filled(c, r - 1) ? gap / 2 : pad, b = filled(c, r + 1) ? gap / 2 : pad;
+          doc.rect(x - l, y - t, CARD_W + l + rt, CARD_H + t + b, 'F');
+        });
+      }
+      page.forEach((u, i) => {
+        const c = i % cols, r = Math.floor(i / cols);
+        doc.addImage(ready.get(u), 'JPEG', x0 + c * (CARD_W + gap), y0 + r * (CARD_H + gap), CARD_W, CARD_H, u, 'FAST');
+      });
+      if ($('marks').checked) {
+        doc.setDrawColor(115); doc.setLineWidth(0.18);
+        const xs = new Set(), ys = new Set();
+        for (let c = 0; c < cols; c++) { xs.add(x0 + c * (CARD_W + gap)); xs.add(x0 + c * (CARD_W + gap) + CARD_W); }
+        for (let r = 0; r < rows; r++) { ys.add(y0 + r * (CARD_H + gap)); ys.add(y0 + r * (CARD_H + gap) + CARD_H); }
+        for (const x of xs) { doc.line(x, y0 - 6, x, y0 - 2); doc.line(x, y0 + gh + 2, x, y0 + gh + 6); }
+        for (const y of ys) { doc.line(x0 - 6, y, x0 - 2, y); doc.line(x0 + gw + 2, y, x0 + gw + 6, y); }
+      }
+    }
+    pdfBlob = doc.output('blob');
+    pdfName = `proxies ${new Date().toISOString().slice(0, 10)}.pdf`;
+    bar.style.width = '100%';
+    status(`PDF ready: ${queue.length} cards on ${doc.getNumberOfPages()} pages (${(pdfBlob.size / 1048576).toFixed(1)} MB).`);
+    $('save').hidden = false;
+    savePdf();
+  } catch (e) { status(e.message || 'Something went wrong making the PDF.', true); }
+  $('make').disabled = false;
+}
+async function savePdf() {
+  if (!pdfBlob) return;
+  const file = new File([pdfBlob], pdfName, { type: 'application/pdf' });
+  try {
+    if (navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], title: pdfName }); return; }
+  } catch (e) { if (e.name === 'AbortError') return; }
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(pdfBlob); a.download = pdfName; document.body.append(a); a.click(); a.remove();
+}
+
+// ---------- wiring ----------
+$('load').onclick = load;
+$('clear').onclick = () => { $('deck').value = ''; store.set('deck', ''); cards = []; tokens = []; render(); status(''); $('missing').textContent = ''; };
+$('noBasics').onclick = () => { cards.forEach(c => { if (c.basic) c.qty = 0; }); render(); };
+$('allOne').onclick = () => { cards.forEach(c => { if (c.qty) c.qty = 1; }); render(); };
+$('make').onclick = makePdf;
+$('save').onclick = savePdf;
+$('pickClose').onclick = () => $('pick').close();
+['paper', 'gap', 'quality', 'corners', 'bg', 'marks'].forEach(id => {
+  const el = $(id), saved = store.get('opt:' + id, null);
+  if (saved !== null) el.type === 'checkbox' ? (el.checked = saved) : (el.value = saved);
+  el.onchange = () => { store.set('opt:' + id, el.type === 'checkbox' ? el.checked : el.value); render(); };
+});
+$('deck').value = store.get('deck', '');
+</script>
+</body>
+</html>
